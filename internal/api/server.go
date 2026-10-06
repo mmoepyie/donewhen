@@ -17,6 +17,7 @@ import (
 	"github.com/johnreginald/donewhen/internal/service"
 	"github.com/johnreginald/donewhen/internal/sse"
 	"github.com/johnreginald/donewhen/internal/store"
+	"github.com/johnreginald/donewhen/internal/version"
 )
 
 type Server struct {
@@ -179,7 +180,11 @@ func (s *Server) Handler() http.Handler {
 
 	// Health + public config.
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]string{"status": "ok"})
+		writeJSON(w, 200, map[string]string{
+			"status":  "ok",
+			"commit":  version.Commit,
+			"builtAt": version.BuiltAt,
+		})
 	})
 	mux.HandleFunc("GET /api/config", s.handleConfig)
 
@@ -310,8 +315,13 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(clean, ".webmanifest") {
 			w.Header().Set("Content-Type", "application/manifest+json")
 		}
-		// The service worker must be served from the root scope uncached.
-		if clean == "/sw.js" {
+		// Build files under /_app/immutable/ carry a content hash: cache them for a year.
+		// Everything else (the service worker, the manifest, index.html) is checked with
+		// the server each time. Without the header a browser guesses a cache time from
+		// Last-Modified and can keep an old page for hours after a deploy.
+		if strings.HasPrefix(clean, "/_app/immutable/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
 			w.Header().Set("Cache-Control", "no-cache")
 		}
 		http.ServeFile(w, r, full)
@@ -319,6 +329,7 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 	}
 	index := filepath.Join(s.staticDir, "index.html")
 	if _, err := os.Stat(index); err == nil {
+		w.Header().Set("Cache-Control", "no-cache")
 		http.ServeFile(w, r, index)
 		return
 	}
